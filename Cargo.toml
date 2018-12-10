@@ -9,10 +9,19 @@ keywords = ["test", "testing", "regression", "snapshot", "golden-master"]
 categories = ["development-tools"]
 edition = "2018"
 
+[features]
+default = ["snap-ron"]
+
+yaml = []
+snap-ron = []
+
 [dependencies]
 pretty_assertions = "^0.5.1"
 serde = "^1.0.7"
 serde_derive = "^1.0.8"
 serde_json = "^1.0.2"
+serde_yaml = "^0.8.8"
 snapshot-proc-macro = { path = "snapshot-proc-macro", version = "0.1" }
 fs2 = "^0.4.3"
+ron = "^0.4.0"
+cfg-if = "^0.1.6"

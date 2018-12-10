@@ -1,10 +1,10 @@
 pub use snapshot_proc_macro::*;
 
-use serde_derive::{Deserialize, Serialize};
+// use serde_derive::*; //{Deserialize, Serialize};
 
 use fs2::FileExt;
 use serde::de::DeserializeOwned;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::fs::{create_dir_all, File, OpenOptions};
@@ -18,7 +18,23 @@ use pretty_assertions::assert_eq;
 static OS_LOCK_FILE_FAIL: &str = "Your OS failed to lock the '.snap' file!";
 static OS_CLONE_FILE_FAIL: &str = "Your OS Failed to clone file handle";
 
-pub type SnapFileContents = BTreeMap<String, Snapshot<serde_json::Value>>;
+mod snap_format;
+
+// use serde_yaml::from_value;
+
+// use snap_format;
+// #[cfg(feature = "ron")]
+// use ron as snap_format;
+// use ron::de::from_str;
+
+// #[cfg(feature = "yaml")]
+// use serde_yaml as snap_format;
+// use serde_yaml::from_str;
+
+// #[cfg(feature = "json")]
+// use serde_json as snap_format;
+
+pub type SnapFileContents<T: Snapable> = BTreeMap<String, Snapshot<T>>;
 
 pub trait Snapable {}
 impl<T> Snapable for T where T: Debug + DeserializeOwned + Serialize {}
@@ -83,7 +99,7 @@ where
             test_function,
         } = previous_snapshot;
 
-        match serde_json::from_value(recorded_value) {
+        match snap_format::from_value(recorded_value) {
             Ok(recorded_value) => {
                 assert_eq!(
                     self.file, file,
@@ -147,10 +163,11 @@ where
 
         file.lock_exclusive().expect(OS_LOCK_FILE_FAIL);
 
-        let mut existing_snaps: SnapFileContents = parse_snaps_from_file(&file, &relative_path);
+        let mut existing_snaps: SnapFileContents<S> = parse_snaps_from_file(&file, &relative_path);
 
         // Now we need to update the particular snapshot we care about
-        existing_snaps.insert(self.module_key(), self.create_deserializable());
+        // existing_snaps.insert(self.module_key(), self.create_deserializable());
+        existing_snaps.insert(self.module_key(), self);
 
         write_snaps_to_file(&mut file, &existing_snaps, &relative_path);
 
@@ -167,18 +184,6 @@ where
         snapshot_key.push_str("::");
         snapshot_key.push_str(&self.test_function);
         snapshot_key
-    }
-
-    fn create_deserializable(&self) -> Snapshot<serde_json::Value> {
-        match serde_json::to_value(&self.recorded_value) {
-            Ok(v) => Snapshot {
-                file: self.file.clone(),
-                test_function: self.test_function.clone(),
-                module_path: self.module_path.clone(),
-                recorded_value: v,
-            },
-            Err(why) => panic!("Unable to serialize test value: {:?}", why),
-        }
     }
 
     fn path(&self, manifest_dir: &str) -> SnapFileSpec {
@@ -217,12 +222,15 @@ fn truncate_file(file: &mut File) {
     file.set_len(file_len).unwrap();
 }
 
-fn parse_snaps_from_file(file: &File, relative_path: &Path) -> SnapFileContents {
+fn parse_snaps_from_file<T: Snapable + DeserializeOwned + Clone>(
+    file: &File,
+    relative_path: &Path,
+) -> SnapFileContents<T> {
     let mut contents = String::new();
     let mut reader = BufReader::new(file.duplicate().expect(OS_CLONE_FILE_FAIL));
     reader.read_to_string(&mut contents).unwrap();
 
-    match serde_json::from_str(&contents) {
+    match snap_format::from_str(&contents) {
         Ok(v) => v,
         Err(why) => {
             if contents.len() == 0 {
@@ -243,17 +251,25 @@ fn parse_snaps_from_file(file: &File, relative_path: &Path) -> SnapFileContents 
     }
 }
 
-fn write_snaps_to_file(file: &mut File, snapshots: &SnapFileContents, relative_path: &Path) {
+fn write_snaps_to_file<'a, T: Serialize>(file: &mut File, snapshots: &T, relative_path: &Path) {
     file.seek(SeekFrom::Start(0)).unwrap();
 
-    let writer = BufWriter::new(file.duplicate().expect(OS_CLONE_FILE_FAIL));
-    match serde_json::to_writer_pretty(writer, &snapshots) {
+    let mut writer = BufWriter::new(file.duplicate().expect(OS_CLONE_FILE_FAIL));
+
+    let mut serializer = snap_format::Serializer::new(None, true);
+    match snapshots.serialize(&mut serializer) {
         Err(why) => panic!(
             "Unable to serialize or write snapshot result to {:?}: {:?}",
             relative_path, why
         ),
         _ => {}
     }
+
+    write!(writer, "{}", serializer.into_output_string());
+    // writer.write(&serializer.output);
+    // match snap_format::to_writer_pretty(writer, &snapshots) {
+
+    // }
 
     truncate_file(file);
 }
